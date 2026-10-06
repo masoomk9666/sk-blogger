@@ -535,37 +535,105 @@ class SK_Generator {
         $language   = get_option( 'sk_language', 'en' );
 
         // STRICT system prompt — forces JSON-only output
-        $system = "You are a JSON API. You MUST respond with ONLY a single valid JSON object. "
-                . "Your response MUST start with the character { and end with the character }. "
-                . "You MUST NOT include any text, explanation, or commentary before or after the JSON. "
-                . "You MUST NOT use markdown code fences (no ```json, no ```). "
-                . "You MUST NOT wrap the JSON in quotes.\n\n"
-                . "Tone: {$tone}. Language: {$language}.\n\n"
-                . "The JSON object MUST contain EXACTLY these keys:\n"
-                . "- title: string (blog post title)\n"
-                . "- content: string (HTML content using <h2>, <h3>, <p>, <ul>, <li> tags)\n"
-                . "- excerpt: string (short summary, max 200 chars)\n"
-                . "- meta_description: string (SEO meta description, 145-160 chars)\n"
-                . "- tags: array of strings (3-6 relevant tags)\n\n"
-                . "Example structure:\n"
-                . "{\"title\":\"...\",\"content\":\"<h2>...</h2><p>...</p>\",\"excerpt\":\"...\",\"meta_description\":\"...\",\"tags\":[\"tag1\",\"tag2\"]}";
+        $system = "You are an elite content writer and SEO strategist with 15+ years of experience. "
+        . "You write content that ranks #1 on Google AND genuinely helps readers.\n\n"
 
-        $prompt = "Write a comprehensive, original, SEO-optimized blog post of approximately {$length} words.\n\n"
-                . "Topic: {$topic}\n"
-                . ( $keywords ? "Target keywords: {$keywords}\n" : '' )
-                . "\nRequirements:\n"
-                . "- Include an engaging introduction (first paragraph MUST contain the primary keyword)\n"
-                . "- Use multiple <h2> sections with <h3> subsections\n"
-                . "- At least ONE <h2> heading MUST contain the primary keyword\n"
-                . "- Include bullet lists where appropriate\n"
-                . "- End with a strong conclusion\n"
-                . "- Content must be valid HTML (use <h2>, <h3>, <p>, <ul>, <li>, <strong> tags)\n"
-                . "- DO NOT include <h1> tags (post title is already H1)\n\n"
-                . "CRITICAL: Return ONLY the raw JSON object. Start with { and end with }. "
-                . "No markdown, no code fences, no explanations.";
+        // ===== OUTPUT FORMAT =====
+        . "OUTPUT FORMAT (CRITICAL):\n"
+        . "You MUST respond with ONLY a single valid JSON object. "
+        . "Start with { and end with }. "
+        . "No markdown, no code fences, no explanations. "
+        . "Required JSON keys:\n"
+        . "- title: string (blog post title)\n"
+        . "- content: string (full HTML body — use <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>)\n"
+        . "- excerpt: string (compelling summary, 150-200 chars)\n"
+        . "- meta_description: string (SEO meta, 145-160 chars, includes primary keyword)\n"
+        . "- tags: array of 4-6 relevant tags\n\n"
+
+        // ===== WRITING STYLE =====
+        . "WRITING STYLE:\n"
+        . "1. USER-FIRST APPROACH: Write for a real human who wants to solve a problem. "
+        . "Answer their questions directly. Use 'you' and 'your'. Be helpful, not salesy.\n"
+        . "2. ACTIVE VOICE: Use active voice throughout. 'AI transforms workflows' NOT 'workflows are transformed by AI'. "
+        . "Strong verbs, direct sentences.\n"
+        . "3. NATIVE LANGUAGE: Write like a native {$language} speaker. "
+        . "Use natural idioms, contractions (it's, you're, don't), and conversational flow. "
+        . "No robotic or translated-sounding text.\n"
+        . "4. GRAMMAR PERFECT: Zero spelling, grammar, or punctuation errors. "
+        . "Vary sentence length. Avoid clichés. Every sentence must add value.\n"
+        . "5. SEMANTIC OPTIMIZATION: Cover the topic comprehensively using related concepts, "
+        . "synonyms, LSI keywords, and entity mentions — not just the primary keyword repeatedly. "
+        . "Google's NLP should understand the full context.\n\n"
+
+        // ===== CONTENT STRUCTURE =====
+        . "CONTENT STRUCTURE:\n"
+        . "- Opening paragraph: Hook the reader + state what they'll learn. Include primary keyword naturally.\n"
+        . "- Multiple <h2> sections (4-7) that cover different angles of the topic.\n"
+        . "- <h3> subsections where depth is needed.\n"
+        . "- Bullet lists (<ul>) and numbered lists (<ol>) for scannability.\n"
+        . "- Include a <strong> key takeaway in each major section.\n"
+        . "- Real-world examples, statistics, or use cases where relevant.\n"
+        . "- Address common questions readers ask (FAQ style).\n"
+        . "- Strong conclusion with actionable next steps.\n"
+        . "- NEVER include <h1> tags (the post title is already H1).\n\n"
+
+        // ===== TONE =====
+        . "TONE: {$tone}. Language: {$language}.";
+
+        $prompt = "Write a comprehensive, original, world-class blog post of approximately {$length} words.\n\n"
+
+        . "TOPIC: {$topic}\n"
+        . ( $keywords ? "PRIMARY KEYWORD: " . trim( explode( ',', $keywords )[0] ) . "\n" : '' )
+        . ( $keywords ? "RELATED KEYWORDS: {$keywords}\n" : '' )
+        . "\n"
+
+        // ===== CONTENT REQUIREMENTS =====
+        . "CONTENT REQUIREMENTS:\n\n"
+
+        . "1. SEMANTIC SEO OPTIMIZATION:\n"
+        . "   - Use the primary keyword in: title, first paragraph, at least one H2, and meta description.\n"
+        . "   - Naturally include related keywords, synonyms, and LSI terms throughout.\n"
+        . "   - Mention relevant entities (tools, companies, concepts, people) Google recognizes.\n"
+        . "   - Use semantic variations — do NOT keyword stuff. Read naturally.\n"
+        . "   - Ensure the content would satisfy Google's 'search intent' for this topic.\n\n"
+
+        . "2. USER-FIRST APPROACH:\n"
+        . "   - Imagine the reader is a beginner trying to solve a specific problem.\n"
+        . "   - Answer their questions directly. Anticipate follow-up questions.\n"
+        . "   - Use 'you' and 'your' — speak to the reader personally.\n"
+        . "   - Give practical, actionable advice — not vague theory.\n"
+        . "   - Include real examples, numbers, or scenarios.\n\n"
+
+        . "3. 100% TOPIC COVERAGE:\n"
+        . "   - Cover the topic completely — no important angle left out.\n"
+        . "   - Include: what, why, how, when, who, and common mistakes.\n"
+        . "   - Address reader objections and FAQs within the content.\n"
+        . "   - Provide enough depth that the reader doesn't need another source.\n\n"
+
+        . "4. LANGUAGE QUALITY:\n"
+        . "   - Zero grammar, spelling, or punctuation errors.\n"
+        . "   - Write as a native {$language} speaker — natural flow, no awkward phrasing.\n"
+        . "   - Use ACTIVE VOICE (90%+ of sentences).\n"
+        . "   - Vary sentence length — short for impact, longer for explanation.\n"
+        . "   - Avoid clichés, filler words, and robotic transitions.\n\n"
+
+        . "5. FORMATTING:\n"
+        . "   - Use proper HTML: <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>.\n"
+        . "   - Short paragraphs (2-4 sentences max) for readability.\n"
+        . "   - Use <strong> to highlight key insights.\n"
+        . "   - Use bullet/numbered lists for steps, tips, or comparisons.\n"
+        . "   - NEVER use <h1> — the post title is already H1.\n\n"
+
+        // ===== FINAL REMINDER =====
+        . "CRITICAL OUTPUT REMINDER:\n"
+        . "Return ONLY the raw JSON object. Start with { and end with }. "
+        . "No markdown code fences. No explanations. No text before or after the JSON.\n\n"
+
+        . "Example of expected output structure:\n"
+        . "{\"title\":\"...\",\"content\":\"<p>...</p><h2>...</h2>...\",\"excerpt\":\"...\",\"meta_description\":\"...\",\"tags\":[\"tag1\",\"tag2\"]}";
 
         // 3x tokens to avoid truncation
-        $max_tokens = (int) ( $length * 3 );
+        $max_tokens = (int) ( $length * 4 );
 
         $raw = SK_AI::generate_text( $prompt, $system, $max_tokens );
 
