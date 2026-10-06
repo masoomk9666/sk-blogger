@@ -1,0 +1,21 @@
+.sk-wrap h1 { margin-bottom: 16px; }
+.sk-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: 16px; margin: 20px 0; }
+.sk-card { background: #fff; padding: 16px; border-left: 4px solid #2271b1; box-shadow: 0 1px 3px rgba(0,0,0,.05); border-radius: 4px; }
+.sk-card h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; color: #666; }
+.sk-stat { font-size: 28px; margin: 0; font-weight: 700; color: #2271b1; }
+.sk-two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+.sk-box { background: #fff; padding: 16px; border: 1px solid #e0e0e0; border-radius: 4px; }
+.sk-status, .sk-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.sk-pending     { background: #fff3cd; color: #856404; }
+.sk-processing  { background: #cce5ff; color: #004085; }
+.sk-completed   { background: #d4edda; color: #155724; }
+.sk-failed      { background: #f8d7da; color: #721c24; }
+.sk-info        { background: #cce5ff; color: #004085; }
+.sk-warning     { background: #fff3cd; color: #856404; }
+.sk-error       { background: #f8d7da; color: #721c24; }
+.sk-publish     { background: #d4edda; color: #155724; }
+.sk-draft       { background: #e2e3e5; color: #383d41; }
+.sk-list { margin: 0; padding-left: 18px; }
+.sk-list li { margin-bottom: 6px; }
+.sk-delete { color: #b32d2e; }
+@media (max-width: 782px) { .sk-two-cols { grid-template-columns: 1fr; } }
