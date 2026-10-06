@@ -43,3 +43,4 @@ function sk_blogger() {
     return SK_Blogger::instance();
 }
 add_action( 'plugins_loaded', 'sk_blogger' );
+add_action( 'wp_head', [ 'SK_SEO', 'output_schema' ] );

@@ -19,3 +19,44 @@
 .sk-list li { margin-bottom: 6px; }
 .sk-delete { color: #b32d2e; }
 @media (max-width: 782px) { .sk-two-cols { grid-template-columns: 1fr; } }
+/* Success/Error cards */
+.sk-card-success { border-left-color: #46b450; }
+.sk-card-success .sk-stat { color: #46b450; }
+.sk-card-error { border-left-color: #dc3232; }
+.sk-card-error .sk-stat { color: #dc3232; }
+
+/* Status list */
+.sk-status-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.sk-status-list li {
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f0f1;
+    font-size: 13px;
+}
+.sk-status-list li:last-child {
+    border-bottom: none;
+}
+
+/* Better hr spacing in boxes */
+.sk-box hr {
+    border: 0;
+    border-top: 1px solid #e0e0e0;
+}
+
+/* Status colors */
+.sk-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.sk-info    { background: #e5f5fa; color: #0073aa; }
+.sk-warning { background: #fff8e5; color: #b26a00; }
+.sk-error   { background: #fdeaea; color: #a00; }
+.sk-success { background: #e8f7e8; color: #2a7a2a; }
+.sk-debug   { background: #f0f0f1; color: #555; }
