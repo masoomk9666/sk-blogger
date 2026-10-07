@@ -198,6 +198,31 @@
             </tr>
         </table>
 
+        <h2><?php esc_html_e( 'Trending Keywords', 'sk-blogger' ); ?></h2>
+<table class="form-table">
+    <tr>
+        <th><?php esc_html_e( 'Enable Trending', 'sk-blogger' ); ?></th>
+        <td>
+            <label>
+                <input type="checkbox" name="sk_trending_enabled" value="1" 
+                    <?php checked( get_option( 'sk_trending_enabled', 1 ), 1 ); ?>>
+                <?php esc_html_e( 'Automatically process trending keywords daily', 'sk-blogger' ); ?>
+            </label>
+        </td>
+    </tr>
+    <tr>
+        <th><?php esc_html_e( 'Run Hour', 'sk-blogger' ); ?></th>
+        <td>
+            <input type="number" name="sk_trending_hour" 
+                value="<?php echo (int) get_option( 'sk_trending_hour', 9 ); ?>" 
+                min="0" max="23" class="small-text">
+            <p class="description">
+                <?php esc_html_e( 'Hour of the day (0-23) to process trending keywords.', 'sk-blogger' ); ?>
+            </p>
+        </td>
+    </tr>
+</table>
+
         <!-- ============================================================
              AUTO TOPIC GENERATION
              ============================================================ -->

@@ -23,40 +23,31 @@ class SK_Admin {
         add_submenu_page( 'sk-blogger', __( 'Dashboard', 'sk-blogger' ), __( 'Dashboard', 'sk-blogger' ), 'manage_options', 'sk-blogger', [ $this, 'dashboard_page' ] );
         add_submenu_page( 'sk-blogger', __( 'Queue', 'sk-blogger' ), __( 'Queue', 'sk-blogger' ), 'manage_options', 'sk-blogger-queue', [ $this, 'queue_page' ] );
         add_submenu_page( 'sk-blogger', __( 'Topics', 'sk-blogger' ), __( 'Topics', 'sk-blogger' ), 'manage_options', 'sk-blogger-topics', [ $this, 'topics_page' ] );
+        add_submenu_page( 'sk-blogger', __( 'Trending Keywords', 'sk-blogger' ), __( 'Trending Keywords', 'sk-blogger' ), 'manage_options', 'sk-blogger-trending', [ $this, 'trending_page' ] );
         add_submenu_page( 'sk-blogger', __( 'Logs', 'sk-blogger' ), __( 'Logs', 'sk-blogger' ), 'manage_options', 'sk-blogger-logs', [ $this, 'logs_page' ] );
         add_submenu_page( 'sk-blogger', __( 'Settings', 'sk-blogger' ), __( 'Settings', 'sk-blogger' ), 'manage_options', 'sk-blogger-settings', [ $this, 'settings_page' ] );
     }
 
     public function register_settings() {
         $fields = [
-            // AI Provider
             'sk_ai_provider', 'sk_openai_key', 'sk_openai_model',
             'sk_gemini_key', 'sk_gemini_model',
             'sk_claude_key', 'sk_claude_model',
-
-            // Post Defaults
             'sk_default_status', 'sk_default_author', 'sk_default_category',
             'sk_post_length', 'sk_tone', 'sk_language',
-
-            // Images
             'sk_image_provider', 'sk_include_images', 'sk_image_count',
-
-            // SEO Enhancements
             'sk_seo_enabled',
             'sk_keyword_placement_enabled',
             'sk_internal_links_enabled',
             'sk_external_links_enabled',
             'sk_schema_enabled',
-
-            // Auto Topic Generation
             'sk_auto_topics_enabled',
             'sk_auto_topics_niche',
             'sk_auto_topics_keywords',
             'sk_auto_topics_count',
             'sk_auto_topics_threshold',
-
-            // Queue Settings
             'sk_queue_batch', 'sk_max_attempts', 'sk_posts_per_day',
+            'sk_trending_enabled', 'sk_trending_hour',
         ];
 
         foreach ( $fields as $f ) {
@@ -69,15 +60,12 @@ class SK_Admin {
         include SK_BLOGGER_PATH . 'admin/views/' . $view . '.php';
     }
 
-    /* ============================================================
-     * PAGE RENDERERS
-     * ============================================================ */
-
     public function dashboard_page() {
         $counts       = SK_DB::queue_counts();
         $recent       = SK_Logger::get_logs( 10 );
         $recent_posts = get_posts( [ 'numberposts' => 5, 'post_status' => [ 'publish', 'draft' ] ] );
-        $this->render( 'dashboard', compact( 'counts', 'recent', 'recent_posts' ) );
+        $trending     = SK_DB::trending_counts();
+        $this->render( 'dashboard', compact( 'counts', 'recent', 'recent_posts', 'trending' ) );
     }
 
     public function queue_page() {
@@ -90,6 +78,13 @@ class SK_Admin {
         $this->handle_post_actions();
         $topics = SK_DB::get_topics( 100 );
         $this->render( 'topics', compact( 'topics' ) );
+    }
+
+    public function trending_page() {
+        $this->handle_post_actions();
+        $trending = SK_DB::get_trending_keywords( 200 );
+        $counts   = SK_DB::trending_counts();
+        $this->render( 'trending', compact( 'trending', 'counts' ) );
     }
 
     public function logs_page() {
@@ -105,10 +100,6 @@ class SK_Admin {
         $this->render( 'settings' );
     }
 
-    /* ============================================================
-     * POST ACTIONS HANDLER
-     * ============================================================ */
-
     private function handle_post_actions() {
         if ( ! isset( $_POST['sk_action'] ) ) { return; }
         if ( ! current_user_can( 'manage_options' ) ) { return; }
@@ -119,9 +110,7 @@ class SK_Admin {
         switch ( $action ) {
 
             case 'add_queue':
-                // Category from dropdown (or 0 → use default from settings)
                 $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : 0;
-
                 SK_DB::enqueue(
                     sanitize_text_field( $_POST['topic'] ?? '' ),
                     sanitize_text_field( $_POST['keywords'] ?? '' ),
@@ -134,7 +123,6 @@ class SK_Admin {
             case 'bulk_queue':
                 $lines       = array_filter( array_map( 'trim', explode( "\n", $_POST['bulk_topics'] ?? '' ) ) );
                 $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : 0;
-
                 SK_Queue::add_bulk(
                     $lines,
                     sanitize_text_field( $_POST['bulk_keywords'] ?? '' ),
@@ -149,7 +137,6 @@ class SK_Admin {
 
             case 'add_topic':
                 $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : null;
-
                 SK_DB::add_topic(
                     sanitize_text_field( $_POST['title'] ?? '' ),
                     sanitize_text_field( $_POST['keywords'] ?? '' ),
@@ -178,6 +165,42 @@ class SK_Admin {
                      SET status = 'pending', attempts = 0, error = NULL, scheduled_at = NOW() 
                      WHERE status = 'failed'"
                 );
+                break;
+
+            /* ---------- TRENDING KEYWORDS ---------- */
+
+            case 'add_trending':
+                $cat_id  = (int) ( $_POST['category_id'] ?? 0 );
+                $date    = sanitize_text_field( $_POST['trend_date'] ?? current_time( 'Y-m-d' ) );
+                $keyword = sanitize_text_field( $_POST['keyword'] ?? '' );
+                $kws     = sanitize_text_field( $_POST['keywords'] ?? '' );
+
+                if ( $cat_id > 0 && ! empty( $keyword ) ) {
+                    SK_DB::add_trending_keyword( $keyword, $cat_id, $date, $kws );
+                }
+                break;
+
+            case 'bulk_trending':
+                $lines   = array_filter( array_map( 'trim', explode( "\n", $_POST['bulk_keywords'] ?? '' ) ) );
+                $cat_id  = (int) ( $_POST['category_id'] ?? 0 );
+                $date    = sanitize_text_field( $_POST['trend_date'] ?? current_time( 'Y-m-d' ) );
+                $kws     = sanitize_text_field( $_POST['keywords'] ?? '' );
+
+                if ( $cat_id > 0 && ! empty( $lines ) ) {
+                    foreach ( $lines as $kw ) {
+                        SK_DB::add_trending_keyword( $kw, $cat_id, $date, $kws );
+                    }
+                }
+                break;
+
+            case 'delete_trending':
+                SK_DB::delete_trending_keyword( (int) ( $_POST['id'] ?? 0 ) );
+                break;
+
+            case 'run_trending_now':
+                if ( class_exists( 'SK_Cron' ) ) {
+                    SK_Cron::process_daily_trending();
+                }
                 break;
         }
     }

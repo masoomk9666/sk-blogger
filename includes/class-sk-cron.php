@@ -3,41 +3,44 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class SK_Cron {
 
-    const HOOK_PROCESS = 'sk_blogger_process_queue';
-    const HOOK_DAILY   = 'sk_blogger_daily_cleanup';
-    const HOOK_TOPICS  = 'sk_blogger_auto_topics';
+    const HOOK_PROCESS  = 'sk_blogger_process_queue';
+    const HOOK_DAILY    = 'sk_blogger_daily_cleanup';
+    const HOOK_TOPICS   = 'sk_blogger_auto_topics';
+    const HOOK_TRENDING = 'sk_blogger_process_trending';
 
     public static function schedule_events() {
-        // CRITICAL: Register custom intervals BEFORE scheduling
-        // WordPress needs these registered to accept 'sk_every_five_minutes'
         self::add_schedules( [] );
 
-        // Schedule PROCESS hook (every 5 minutes)
         if ( ! wp_next_scheduled( self::HOOK_PROCESS ) ) {
             $result = wp_schedule_event( time() + 60, 'sk_every_five_minutes', self::HOOK_PROCESS );
-            
-            // Fallback: if custom interval failed, use WordPress built-in 'hourly'
             if ( $result === false || is_wp_error( $result ) ) {
-                SK_Logger::warn( 'Custom 5-min interval failed, using hourly fallback.', 'cron' );
                 wp_schedule_event( time() + 60, 'hourly', self::HOOK_PROCESS );
-            } else {
-                SK_Logger::info( 'Process queue scheduled every 5 minutes.', 'cron' );
             }
         }
 
-        // Schedule DAILY cleanup hook
         if ( ! wp_next_scheduled( self::HOOK_DAILY ) ) {
             wp_schedule_event( time() + 3600, 'daily', self::HOOK_DAILY );
         }
 
-        // Schedule TOPICS auto-generation hook
         if ( ! wp_next_scheduled( self::HOOK_TOPICS ) ) {
             wp_schedule_event( time() + 7200, 'daily', self::HOOK_TOPICS );
+        }
+
+        if ( ! wp_next_scheduled( self::HOOK_TRENDING ) ) {
+            $hour     = (int) get_option( 'sk_trending_hour', 9 );
+            $next_run = strtotime( "tomorrow {$hour}:00:00" );
+            if ( $next_run < time() ) {
+                $next_run = strtotime( "today {$hour}:00:00" );
+                if ( $next_run < time() ) {
+                    $next_run = time() + 300;
+                }
+            }
+            wp_schedule_event( $next_run, 'daily', self::HOOK_TRENDING );
         }
     }
 
     public static function clear_events() {
-        foreach ( [ self::HOOK_PROCESS, self::HOOK_DAILY, self::HOOK_TOPICS ] as $hook ) {
+        foreach ( [ self::HOOK_PROCESS, self::HOOK_DAILY, self::HOOK_TOPICS, self::HOOK_TRENDING ] as $hook ) {
             $ts = wp_next_scheduled( $hook );
             if ( $ts ) { wp_unschedule_event( $ts, $hook ); }
             wp_clear_scheduled_hook( $hook );
@@ -46,32 +49,23 @@ class SK_Cron {
 
     public static function init() {
         add_filter( 'cron_schedules', [ __CLASS__, 'add_schedules' ] );
-        
-        add_action( self::HOOK_PROCESS, [ 'SK_Queue', 'process' ] );
-        add_action( self::HOOK_DAILY,   [ __CLASS__, 'daily_cleanup' ] );
-        add_action( self::HOOK_TOPICS,  [ __CLASS__, 'auto_generate_topics' ] );
 
-        // Fallback: verify cron is scheduled on every admin page load
-        // If missing (e.g. after plugin update), re-schedule it
+        add_action( self::HOOK_PROCESS,  [ 'SK_Queue', 'process' ] );
+        add_action( self::HOOK_DAILY,    [ __CLASS__, 'daily_cleanup' ] );
+        add_action( self::HOOK_TOPICS,   [ __CLASS__, 'auto_generate_topics' ] );
+        add_action( self::HOOK_TRENDING, [ __CLASS__, 'process_daily_trending' ] );
+
         add_action( 'admin_init', [ __CLASS__, 'verify_schedule' ] );
     }
 
-    /**
-     * Self-healing: If cron hook is missing, re-schedule it.
-     * This runs on admin_init so any admin visit fixes the problem.
-     */
     public static function verify_schedule() {
         if ( ! wp_next_scheduled( self::HOOK_PROCESS ) ) {
-            SK_Logger::warn( 'Process hook was missing, re-scheduling now.', 'cron' );
             self::schedule_events();
         }
     }
 
     public static function add_schedules( $schedules ) {
-        // Guard: $schedules may be empty array when called directly
-        if ( ! is_array( $schedules ) ) {
-            $schedules = [];
-        }
+        if ( ! is_array( $schedules ) ) { $schedules = []; }
 
         $schedules['sk_every_five_minutes'] = [
             'interval' => 300,
@@ -88,17 +82,102 @@ class SK_Cron {
         global $wpdb;
         $table = SK_DB::table( 'logs' );
         $wpdb->query( "DELETE FROM {$table} WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)" );
+
+        $trending_table = SK_DB::table( 'trending' );
+        $wpdb->query( "DELETE FROM {$trending_table} WHERE trend_date < DATE_SUB(NOW(), INTERVAL 60 DAY)" );
+
         SK_Logger::info( 'Daily cleanup executed.', 'cron' );
     }
 
     public static function auto_generate_topics() {
-        $topics = SK_DB::get_topics( 5 );
-        foreach ( $topics as $t ) {
-            if ( $t->status === 'idea' ) {
-                SK_DB::enqueue( $t->title, $t->keywords, 5 );
-                global $wpdb;
-                $wpdb->update( SK_DB::table( 'topics' ), [ 'status' => 'queued' ], [ 'id' => $t->id ] );
-            }
+        if ( ! get_option( 'sk_auto_topics_enabled', 0 ) ) { return; }
+
+        $counts    = SK_DB::queue_counts();
+        $pending   = (int) $counts['pending'];
+        $threshold = (int) get_option( 'sk_auto_topics_threshold', 3 );
+
+        if ( $pending >= $threshold ) { return; }
+
+        $niche    = get_option( 'sk_auto_topics_niche', '' );
+        $keywords = get_option( 'sk_auto_topics_keywords', '' );
+        $count    = (int) get_option( 'sk_auto_topics_count', 10 );
+
+        if ( empty( $niche ) ) { return; }
+        if ( ! class_exists( 'SK_AI' ) ) { return; }
+
+        $topics = SK_AI::generate_topics( $count, $niche, $keywords );
+        if ( empty( $topics ) ) { return; }
+
+        $added = 0;
+        foreach ( $topics as $topic ) {
+            SK_DB::enqueue( $topic, $keywords, 5 );
+            $added++;
         }
+
+        SK_Logger::info( "Auto-topics: Added {$added} topics.", 'cron' );
+    }
+
+    /**
+     * Daily trending processor — pick ONE keyword per category, add to queue.
+     */
+    public static function process_daily_trending() {
+        if ( ! get_option( 'sk_trending_enabled', 1 ) ) {
+            SK_Logger::info( 'Trending disabled. Skipping.', 'cron' );
+            return;
+        }
+
+        SK_Logger::info( 'Daily trending processor started.', 'cron' );
+
+        $today      = current_time( 'Y-m-d' );
+        $categories = SK_DB::get_categories_with_trending( $today );
+
+        if ( empty( $categories ) ) {
+            SK_Logger::info( "No trending keywords for {$today}.", 'cron' );
+            return;
+        }
+
+        $added   = 0;
+        $skipped = 0;
+
+        foreach ( $categories as $cat_id ) {
+            $cat_id = (int) $cat_id;
+
+            $trending = SK_DB::get_today_trending_for_category( $cat_id, $today );
+
+            if ( empty( $trending ) ) { $skipped++; continue; }
+
+            $item = $trending[0];
+
+            global $wpdb;
+            $queue_table = SK_DB::table( 'queue' );
+            $exists = $wpdb->get_var( $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$queue_table} 
+                 WHERE topic = %s AND category_id = %d AND status IN ('pending', 'processing')",
+                $item->keyword, $cat_id
+            ) );
+
+            if ( $exists ) {
+                SK_DB::mark_trending_used( $item->id );
+                $skipped++;
+                continue;
+            }
+
+            // Build combined keywords — trending keyword as primary
+            $primary_kw  = $item->keyword;
+            $extra_kws   = ! empty( $item->keywords ) ? $item->keywords : '';
+            $combined_kw = $extra_kws ? $primary_kw . ', ' . $extra_kws : $primary_kw;
+
+            $queue_id = SK_DB::enqueue( $item->keyword, $combined_kw, 1, null, $cat_id );
+
+            SK_DB::mark_trending_used( $item->id );
+
+            $cat = get_category( $cat_id );
+            $cat_name = $cat ? $cat->name : "Category #{$cat_id}";
+
+            $added++;
+            SK_Logger::info( "Trending queued: '{$item->keyword}' → {$cat_name} (queue #{$queue_id})", 'cron' );
+        }
+
+        SK_Logger::info( "Trending done: {$added} added, {$skipped} skipped.", 'cron' );
     }
 }

@@ -10,15 +10,6 @@ class SK_DB {
 
     /* --------------------- QUEUE --------------------- */
 
-    /**
-     * Add item to queue.
-     *
-     * @param string   $topic
-     * @param string   $keywords
-     * @param int      $priority
-     * @param string   $scheduled_at
-     * @param int|null $category_id   NEW — category to assign when post is created
-     */
     public static function enqueue( $topic, $keywords = '', $priority = 5, $scheduled_at = null, $category_id = null ) {
         global $wpdb;
         $scheduled_at = $scheduled_at ?: current_time( 'mysql' );
@@ -31,7 +22,6 @@ class SK_DB {
             'status'       => 'pending',
         ];
 
-        // Category — use provided or fall back to settings default
         if ( $category_id === null ) {
             $category_id = (int) get_option( 'sk_default_category', 1 );
         } else {
@@ -88,19 +78,6 @@ class SK_DB {
         return $out;
     }
 
-    /**
-     * Get queue items by status with optional category filter.
-     * (Utility method — optional)
-     */
-    public static function get_queue_by_category( $category_id, $limit = 100 ) {
-        global $wpdb;
-        $table = self::table( 'queue' );
-        return $wpdb->get_results( $wpdb->prepare(
-            "SELECT * FROM {$table} WHERE category_id = %d ORDER BY id DESC LIMIT %d",
-            (int) $category_id, $limit
-        ) );
-    }
-
     /* --------------------- TOPICS --------------------- */
 
     public static function add_topic( $title, $keywords = '', $category_id = null ) {
@@ -125,5 +102,115 @@ class SK_DB {
     public static function delete_topic( $id ) {
         global $wpdb;
         return $wpdb->delete( self::table( 'topics' ), [ 'id' => (int) $id ] );
+    }
+
+    /* --------------------- TRENDING KEYWORDS --------------------- */
+
+    public static function add_trending_keyword( $keyword, $category_id, $trend_date = null, $keywords = '' ) {
+        global $wpdb;
+        $trend_date = $trend_date ?: current_time( 'Y-m-d' );
+        $keywords   = sanitize_text_field( $keywords );
+
+        $exists = $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM " . self::table( 'trending' ) . " 
+             WHERE keyword = %s AND category_id = %d AND trend_date = %s",
+            $keyword, (int) $category_id, $trend_date
+        ) );
+
+        if ( $exists ) {
+            return (int) $exists;
+        }
+
+        $wpdb->insert( self::table( 'trending' ), [
+            'keyword'     => sanitize_text_field( $keyword ),
+            'keywords'    => $keywords,
+            'category_id' => (int) $category_id,
+            'trend_date'  => $trend_date,
+            'status'      => 'pending',
+        ] );
+        return (int) $wpdb->insert_id;
+    }
+
+    public static function get_trending_keywords( $limit = 100, $offset = 0, $category_id = null, $status = null, $trend_date = null ) {
+        global $wpdb;
+        $table  = self::table( 'trending' );
+        $where  = [];
+        $params = [];
+
+        if ( $category_id ) {
+            $where[]  = 'category_id = %d';
+            $params[] = (int) $category_id;
+        }
+        if ( $status ) {
+            $where[]  = 'status = %s';
+            $params[] = $status;
+        }
+        if ( $trend_date ) {
+            $where[]  = 'trend_date = %s';
+            $params[] = $trend_date;
+        }
+
+        $sql = "SELECT * FROM {$table}";
+        if ( ! empty( $where ) ) {
+            $sql .= ' WHERE ' . implode( ' AND ', $where );
+        }
+        $sql .= " ORDER BY trend_date DESC, id DESC LIMIT %d OFFSET %d";
+        $params[] = $limit;
+        $params[] = $offset;
+
+        return $wpdb->get_results( $wpdb->prepare( $sql, $params ) );
+    }
+
+    public static function get_today_trending_for_category( $category_id, $trend_date = null ) {
+        global $wpdb;
+        $trend_date = $trend_date ?: current_time( 'Y-m-d' );
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT * FROM " . self::table( 'trending' ) . " 
+             WHERE category_id = %d AND trend_date = %s AND status = 'pending'
+             ORDER BY id ASC LIMIT 1",
+            (int) $category_id, $trend_date
+        ) );
+    }
+
+    public static function mark_trending_used( $id, $post_id = null ) {
+        global $wpdb;
+        $data = [
+            'status'  => 'used',
+            'used_at' => current_time( 'mysql' ),
+        ];
+        if ( $post_id ) {
+            $data['post_id'] = (int) $post_id;
+        }
+        return $wpdb->update( self::table( 'trending' ), $data, [ 'id' => (int) $id ] );
+    }
+
+    public static function delete_trending_keyword( $id ) {
+        global $wpdb;
+        return $wpdb->delete( self::table( 'trending' ), [ 'id' => (int) $id ] );
+    }
+
+    public static function trending_counts( $trend_date = null ) {
+        global $wpdb;
+        $trend_date = $trend_date ?: current_time( 'Y-m-d' );
+        $table      = self::table( 'trending' );
+        $rows       = $wpdb->get_results( $wpdb->prepare(
+            "SELECT status, COUNT(*) AS c FROM {$table} 
+             WHERE trend_date = %s GROUP BY status",
+            $trend_date
+        ), OBJECT_K );
+        $out = [ 'pending' => 0, 'used' => 0, 'skipped' => 0 ];
+        foreach ( $rows as $k => $row ) { $out[ $k ] = (int) $row->c; }
+        return $out;
+    }
+
+    public static function get_categories_with_trending( $trend_date = null ) {
+        global $wpdb;
+        $trend_date = $trend_date ?: current_time( 'Y-m-d' );
+        $table      = self::table( 'trending' );
+        return $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT category_id FROM {$table} 
+             WHERE trend_date = %s AND status = 'pending'",
+            $trend_date
+        ) );
     }
 }
