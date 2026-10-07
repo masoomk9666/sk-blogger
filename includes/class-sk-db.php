@@ -213,4 +213,131 @@ class SK_DB {
             $trend_date
         ) );
     }
+
+    /* --------------------- REUSABLE KEYWORDS (FALLBACK CHAIN) --------------------- */
+
+    /**
+     * Get recently used keywords (last 30 days) for reuse.
+     * Used in STEP 3 fallback — when no new or old pending keywords.
+     *
+     * @param int      $limit       How many to return
+     * @param int|null $category_id Filter by category (optional)
+     * @return array
+     */
+    public static function get_reusable_keywords( $limit = 20, $category_id = null ) {
+        global $wpdb;
+        $table = self::table( 'trending' );
+
+        $where  = "status = 'used' AND trend_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)";
+        $params = [];
+
+        if ( $category_id ) {
+            $where   .= " AND category_id = %d";
+            $params[] = (int) $category_id;
+        }
+
+        $params[] = $limit;
+
+        $sql = "SELECT * FROM {$table} 
+                WHERE {$where}
+                ORDER BY used_at DESC, id DESC 
+                LIMIT %d";
+
+        return $wpdb->get_results( $wpdb->prepare( $sql, $params ) );
+    }
+
+    /**
+     * Get old pending keywords from earlier dates.
+     * Used in STEP 2 fallback — when today's keywords are unavailable.
+     *
+     * @param int|null $category_id Filter by category (optional)
+     * @param int      $limit       How many to return
+     * @return array
+     */
+    public static function get_old_pending_keywords( $category_id = null, $limit = 5 ) {
+        global $wpdb;
+        $table = self::table( 'trending' );
+        $today = current_time( 'Y-m-d' );
+
+        $where  = "status = 'pending' AND trend_date < %s";
+        $params = [ $today ];
+
+        if ( $category_id ) {
+            $where   .= " AND category_id = %d";
+            $params[] = (int) $category_id;
+        }
+
+        $params[] = $limit;
+
+        $sql = "SELECT * FROM {$table} 
+                WHERE {$where}
+                ORDER BY trend_date DESC, id ASC 
+                LIMIT %d";
+
+        return $wpdb->get_results( $wpdb->prepare( $sql, $params ) );
+    }
+
+    /**
+     * Check if a keyword has been used for a category (any date).
+     * Useful for preventing duplicates.
+     *
+     * @param string $keyword
+     * @param int    $category_id
+     * @return bool
+     */
+    public static function is_keyword_used( $keyword, $category_id ) {
+        global $wpdb;
+        $table = self::table( 'trending' );
+        return (bool) $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table} 
+             WHERE keyword = %s AND category_id = %d AND status = 'used'",
+            $keyword, (int) $category_id
+        ) );
+    }
+
+    /**
+     * Clone an old trending keyword for a new date.
+     * Used in STEP 3 — when we need to reuse a recently used keyword.
+     *
+     * @param int         $source_id  Source trending row ID
+     * @param string|null $new_date   New trend date (defaults to today)
+     * @return int|false  New row ID or false on failure
+     */
+    public static function reuse_trending_keyword( $source_id, $new_date = null ) {
+        global $wpdb;
+        $new_date = $new_date ?: current_time( 'Y-m-d' );
+        $table    = self::table( 'trending' );
+
+        // Fetch source row
+        $source = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$table} WHERE id = %d",
+            (int) $source_id
+        ) );
+
+        if ( ! $source ) {
+            return false;
+        }
+
+        // Prevent duplicate for same date+category
+        $exists = $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM {$table} 
+             WHERE keyword = %s AND category_id = %d AND trend_date = %s",
+            $source->keyword, (int) $source->category_id, $new_date
+        ) );
+
+        if ( $exists ) {
+            return (int) $exists;
+        }
+
+        // Insert as new pending row
+        $wpdb->insert( $table, [
+            'keyword'     => $source->keyword,
+            'keywords'    => $source->keywords,
+            'category_id' => (int) $source->category_id,
+            'trend_date'  => $new_date,
+            'status'      => 'pending',
+        ] );
+
+        return (int) $wpdb->insert_id;
+    }
 }

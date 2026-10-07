@@ -9,7 +9,6 @@ class SK_Generator {
         $tone       = get_option( 'sk_tone', 'professional' );
         $language   = get_option( 'sk_language', 'en' );
 
-        // ===== FALLBACK: If no keywords, use topic as primary keyword =====
         if ( empty( $keywords ) ) {
             $keywords = $topic;
             SK_Logger::info( "No keywords provided, using topic as focus keyword: {$topic}", 'generator' );
@@ -53,11 +52,11 @@ class SK_Generator {
                 . "- 4-7 <h2> sections (each starts with answer-first summary).\n"
                 . "- Bullet lists, <strong> takeaways.\n"
                 . "- FAQ section at end.\n"
-                . "- NEVER use <h1> tags.\n\n"
+                . "- NEVER use <h1> tags.\n"
+                . "- NEVER use HTML comments (<!-- -->).\n\n"
 
                 . "Tone: {$tone}. Language: {$language}.";
 
-        // ===== USER PROMPT =====
         $prompt = "Write a comprehensive, original, world-class blog post of ~{$length} words.\n\n"
                 . "TOPIC: {$topic}\n"
                 . ( $primary_kw ? "PRIMARY KEYWORD: {$primary_kw}\n" : '' )
@@ -68,7 +67,7 @@ class SK_Generator {
                 . "3. 100% COVERAGE: what/why/how/when/who/mistakes.\n"
                 . "4. LANGUAGE: Zero errors. Native {$language}. Active voice.\n"
                 . "5. AEO: Answer-first. FAQ section (4-6 Q&A). Inline sources.\n"
-                . "6. FORMATTING: <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>. No <h1>.\n\n"
+                . "6. FORMATTING: <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>. No <h1>, no HTML comments.\n\n"
                 . "CRITICAL: Return ONLY raw JSON. Start { end }. No markdown.";
 
         $max_tokens = (int) ( $length * 4 );
@@ -92,9 +91,7 @@ class SK_Generator {
             }
         }
 
-        // ============================================================
         // SEO Enhancements
-        // ============================================================
         $post_title = wp_strip_all_tags( $data['title'] ?? $topic );
         $content    = self::optimize_content_for_keywords( $data['content'], $topic, $keywords, $data );
         $content    = self::inject_links( $content, $topic, $keywords, 0 );
@@ -164,6 +161,9 @@ class SK_Generator {
 
     private static function optimize_content_for_keywords( $content, $topic, $keywords, $data = [] ) {
         $content = trim( $content );
+
+        // Remove HTML comments
+        $content = preg_replace( '/<!--.*?-->/s', '', $content );
 
         // H1 → H2
         $content = preg_replace( '/<h1(\s[^>]*)?>(.*?)<\/h1>/is', '<h2$1>$2</h2>', $content );
@@ -251,86 +251,455 @@ class SK_Generator {
      * ================================================================ */
 
     private static function inject_links( $content, $topic, $keywords = '', $post_id = 0 ) {
-        if ( ! get_option( 'sk_internal_links_enabled', 1 )
-          && ! get_option( 'sk_external_links_enabled', 1 ) ) {
+        $internal_enabled = get_option( 'sk_internal_links_enabled', 1 );
+        $external_enabled = get_option( 'sk_external_links_enabled', 1 );
+
+        if ( ! $internal_enabled && ! $external_enabled ) {
             return $content;
         }
 
-        $insertions = [];
+        $internal_links = [];
+        $external_links = [];
 
-        if ( get_option( 'sk_internal_links_enabled', 1 ) ) {
-            $internal = self::find_internal_link_targets( $topic, $keywords, $post_id );
-            foreach ( $internal as $link ) {
-                $insertions[] = [
-                    'url'   => $link['url'],
-                    'text'  => $link['anchor'],
-                    'type'  => 'internal',
-                    'title' => $link['title'],
-                ];
-            }
+        if ( $internal_enabled ) {
+            $internal_links = self::find_internal_link_targets( $topic, $keywords, $post_id, 3 );
         }
 
-        if ( get_option( 'sk_external_links_enabled', 1 ) ) {
-            $external = self::find_external_link_targets( $topic, $keywords );
-            foreach ( $external as $link ) {
-                $insertions[] = [
-                    'url'   => $link['url'],
-                    'text'  => $link['anchor'],
-                    'type'  => 'external',
-                ];
-            }
+        if ( $external_enabled ) {
+            $external_links = self::find_external_link_targets( $topic, $keywords, 2 );
         }
 
-        if ( empty( $insertions ) ) { return $content; }
+        if ( empty( $internal_links ) && empty( $external_links ) ) {
+            return $content;
+        }
 
-        return self::insert_links_into_content( $content, $insertions );
+        return self::insert_links_into_content( $content, $internal_links, $external_links );
     }
 
-    private static function find_internal_link_targets( $topic, $keywords, $exclude_post_id = 0, $count = 3 ) {
-        $targets  = [];
-        $kw_array = SK_SEO::get_all_keywords( $keywords );
+    /**
+ * GUARANTEED KEYWORD LINKS — Every keyword gets a link.
+ *
+ * Strategy (per keyword):
+ *   1. Find post with keyword in title/content → link to post
+ *   2. If not found → create search-results link (?s=keyword)
+ *   3. Final fallback → category link (only if no keywords given)
+ */
+private static function find_internal_link_targets( $topic, $keywords, $exclude_post_id = 0, $count = 3 ) {
+    $targets  = [];
+    $used_ids = [];
+    $kw_array = SK_SEO::get_all_keywords( $keywords );
 
-        $args = [
-            'post_type'      => 'post',
-            'post_status'    => 'publish',
-            'posts_per_page' => 20,
-            'post__not_in'   => $exclude_post_id ? [ $exclude_post_id ] : [],
-            's'              => $topic,
-        ];
+    // If user provided keywords, we MUST create a link for EACH one
+    if ( ! empty( $kw_array ) ) {
 
-        $query = new WP_Query( $args );
+        // Limit to $count keywords (default 3)
+        $kw_array = array_slice( array_filter( $kw_array ), 0, $count );
 
-        if ( $query->have_posts() ) {
-            while ( $query->have_posts() && count( $targets ) < $count ) {
-                $query->the_post();
-                $pid    = get_the_ID();
-                $title  = get_the_title( $pid );
-                $anchor = self::create_anchor_text( $title, $kw_array );
+        foreach ( $kw_array as $kw ) {
+            $kw = trim( $kw );
+            if ( empty( $kw ) ) { continue; }
 
+            // ===== STEP 1: Try to find a real post matching this keyword =====
+            $matched_post = self::find_post_for_keyword( $kw, $exclude_post_id, $used_ids );
+
+            if ( $matched_post ) {
                 $targets[] = [
-                    'url'    => get_permalink( $pid ),
-                    'anchor' => $anchor,
-                    'title'  => $title,
-                    'id'     => $pid,
+                    'url'    => get_permalink( $matched_post->ID ),
+                    'anchor' => $kw,   // ✅ EXACT keyword as anchor
+                    'title'  => get_the_title( $matched_post->ID ),
+                    'id'     => $matched_post->ID,
+                    'type'   => 'post',
+                    'source' => 'keyword-post',
                 ];
+                $used_ids[] = $matched_post->ID;
+                continue;
+            }
+
+            // ===== STEP 2: No matching post → use SEARCH RESULTS link =====
+            // This guarantees a link exists for the keyword
+            $search_url = home_url( '/?s=' . rawurlencode( $kw ) );
+
+            $targets[] = [
+                'url'    => $search_url,
+                'anchor' => $kw,   // ✅ EXACT keyword as anchor
+                'title'  => sprintf( 'Search results for: %s', $kw ),
+                'id'     => 0,
+                'type'   => 'search',
+                'source' => 'keyword-search',
+            ];
+        }
+
+        return $targets;  // ✅ Always returns keyword links
+    }
+
+    // ===== FALLBACK: No keywords provided → use category links =====
+    $needed = $count - count( $targets );
+
+    if ( $needed > 0 ) {
+        $categories = get_categories( [
+            'taxonomy'   => 'category',
+            'hide_empty' => true,
+            'number'     => $needed + 5,
+            'orderby'    => 'count',
+            'order'      => 'DESC',
+        ] );
+
+        // Prefer categories matching the topic
+        $matched_cats   = [];
+        $unmatched_cats = [];
+
+        foreach ( $categories as $cat ) {
+            if ( mb_stripos( $topic, $cat->name ) !== false ) {
+                $matched_cats[] = $cat;
+            } else {
+                $unmatched_cats[] = $cat;
+            }
+        }
+
+        foreach ( array_merge( $matched_cats, $unmatched_cats ) as $cat ) {
+            if ( count( $targets ) >= $count ) { break; }
+
+            $targets[] = [
+                'url'    => get_category_link( $cat->term_id ),
+                'anchor' => $cat->name,
+                'title'  => $cat->name,
+                'id'     => 0,
+                'type'   => 'category',
+                'source' => 'category-fallback',
+            ];
+        }
+    }
+
+    return $targets;
+}
+
+/**
+ * Find a single post matching the given keyword.
+ * Searches title first, then content.
+ *
+ * @param string $keyword
+ * @param int    $exclude_post_id
+ * @param array  $used_ids
+ * @return WP_Post|null
+ */
+private static function find_post_for_keyword( $keyword, $exclude_post_id = 0, $used_ids = [] ) {
+    $exclude = $used_ids;
+    if ( $exclude_post_id ) { $exclude[] = $exclude_post_id; }
+
+    // ---- Try 1: Search in TITLE only (most relevant) ----
+    $title_query = new WP_Query( [
+        'post_type'      => 'post',
+        'post_status'    => 'publish',
+        'posts_per_page' => 1,
+        'post__not_in'   => $exclude,
+        's'              => $keyword,
+        'orderby'        => 'relevance',
+    ] );
+
+    if ( $title_query->have_posts() ) {
+        $post = $title_query->posts[0];
+        wp_reset_postdata();
+
+        // Verify keyword actually appears in title OR content
+        $title   = strtolower( get_the_title( $post->ID ) );
+        $content = strtolower( wp_strip_all_tags( $post->post_content ) );
+        $kw_low  = strtolower( $keyword );
+
+        if ( mb_strpos( $title, $kw_low ) !== false || mb_strpos( $content, $kw_low ) !== false ) {
+            return $post;
+        }
+    }
+    wp_reset_postdata();
+
+    // ---- Try 2: Search by each word of the keyword ----
+    $words = array_filter( explode( ' ', $keyword ), function( $w ) { return mb_strlen( $w ) > 3; } );
+
+    if ( ! empty( $words ) ) {
+        foreach ( $words as $word ) {
+            $word_query = new WP_Query( [
+                'post_type'      => 'post',
+                'post_status'    => 'publish',
+                'posts_per_page' => 1,
+                'post__not_in'   => $exclude,
+                's'              => $word,
+                'orderby'        => 'relevance',
+            ] );
+
+            if ( $word_query->have_posts() ) {
+                $post = $word_query->posts[0];
+                wp_reset_postdata();
+
+                $title = strtolower( get_the_title( $post->ID ) );
+                if ( mb_strpos( $title, strtolower( $word ) ) !== false ) {
+                    return $post;
+                }
             }
             wp_reset_postdata();
         }
+    }
 
-        if ( empty( $targets ) ) {
-            $categories = get_categories( [ 'number' => 3, 'hide_empty' => true ] );
-            foreach ( $categories as $cat ) {
-                if ( count( $targets ) >= $count ) { break; }
-                $targets[] = [
-                    'url'    => get_category_link( $cat->term_id ),
-                    'anchor' => $cat->name,
-                    'title'  => $cat->name,
-                    'id'     => 0,
-                ];
+    // ---- Try 3: Search by TAG matching keyword ----
+    $tag = get_term_by( 'name', $keyword, 'post_tag' );
+    if ( ! $tag ) {
+        $tag = get_term_by( 'slug', sanitize_title( $keyword ), 'post_tag' );
+    }
+
+    if ( $tag && ! is_wp_error( $tag ) ) {
+        $tag_query = new WP_Query( [
+            'post_type'      => 'post',
+            'post_status'    => 'publish',
+            'posts_per_page' => 1,
+            'post__not_in'   => $exclude,
+            'tag_id'         => $tag->term_id,
+        ] );
+
+        if ( $tag_query->have_posts() ) {
+            $post = $tag_query->posts[0];
+            wp_reset_postdata();
+            return $post;
+        }
+        wp_reset_postdata();
+    }
+
+    return null;
+}
+
+    /**
+     * Insert links into content — SAFE from HTML comments, scripts, styles.
+     */
+    private static function insert_links_into_content( $content, $internal_links, $external_links ) {
+        $used_anchors = [];
+        $ext_count    = 0;
+
+        // ===== 1. Insert internal links =====
+        $internal_inserted = 0;
+
+        foreach ( $internal_links as $link ) {
+            $anchor = $link['anchor'];
+
+            if ( in_array( strtolower( $anchor ), $used_anchors, true ) ) {
+                continue;
+            }
+
+            // Try to find anchor in <p>
+            $inserted = self::insert_link_by_anchor( $content, $anchor, $link, 'internal' );
+
+            if ( $inserted ) {
+                $used_anchors[] = strtolower( $anchor );
+                $internal_inserted++;
             }
         }
 
-        return $targets;
+        // ===== 2. Insert external links =====
+        foreach ( $external_links as $link ) {
+            $anchor = $link['anchor'];
+
+            if ( in_array( strtolower( $anchor ), $used_anchors, true ) ) {
+                continue;
+            }
+
+            $ext_count++;
+            $rel = ( $ext_count === 1 ) ? 'noopener' : 'noopener nofollow';
+
+            $inserted = self::insert_link_by_anchor( $content, $anchor, [
+                'url'    => $link['url'],
+                'anchor' => $anchor,
+            ], 'external', $rel );
+
+            if ( $inserted ) {
+                $used_anchors[] = strtolower( $anchor );
+            }
+        }
+
+        // ===== 3. Fallback: paragraph injection if none inserted =====
+        if ( $internal_inserted === 0 && ! empty( $internal_links ) ) {
+            $content = self::inject_internal_links_into_paragraphs( $content, $internal_links );
+        }
+
+        // ===== 4. Fallback: append external links if none inserted =====
+        if ( $ext_count === 0 && ! empty( $external_links ) ) {
+            $content = self::append_external_links_to_content( $content, $external_links );
+        }
+
+        return $content;
+    }
+
+    /**
+     * Try to insert a link by finding the anchor text (safe from comments/scripts/a).
+     * If anchor doesn't exist in <p>, inject it into a paragraph.
+     */
+    private static function insert_link_by_anchor( &$content, $anchor, $link, $type = 'internal', $rel = 'internal' ) {
+        // Check if anchor exists in a safe <p> region
+        $exists = self::anchor_exists_in_paragraph( $content, $anchor );
+
+        if ( $exists ) {
+            // Build replacement
+            if ( $type === 'external' ) {
+                $replacement = '<a href="' . esc_url( $link['url'] ) . '" target="_blank" rel="' . esc_attr( $rel ) . '">' . esc_html( $anchor ) . '</a>';
+            } else {
+                $replacement = '<a href="' . esc_url( $link['url'] ) . '" rel="internal">' . esc_html( $anchor ) . '</a>';
+            }
+
+            // Replace only first safe occurrence
+            $content = self::replace_first_anchor_outside_tags( $content, $anchor, $replacement );
+            return true;
+        }
+
+        // Anchor not found — inject at end of a random paragraph
+        return self::inject_link_into_random_paragraph( $content, $anchor, $link, $type, $rel );
+    }
+
+    /**
+     * Inject a link into a random <p> paragraph (when anchor not found).
+     */
+    private static function inject_link_into_random_paragraph( &$content, $anchor, $link, $type = 'internal', $rel = 'internal' ) {
+        // Split by </p>
+        $parts = preg_split( '/(<\/p>)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
+
+        if ( count( $parts ) < 6 ) {
+            return false; // Not enough paragraphs
+        }
+
+        // Find candidate paragraphs (mid-article preferred)
+        $total_paras = 0;
+        for ( $i = 0; $i < count( $parts ); $i += 2 ) { $total_paras++; }
+
+        if ( $total_paras < 3 ) { return false; }
+
+        // Pick a random paragraph in the second half
+        $start_idx = (int) ( $total_paras / 3 );
+        $end_idx   = $total_paras - 1;
+        $para_idx  = wp_rand( $start_idx, $end_idx );
+
+        // Get the actual position in $parts array
+        $pos = $para_idx * 2;
+
+        if ( ! isset( $parts[$pos - 1] ) ) { return false; }
+
+        // Build link HTML
+        if ( $type === 'external' ) {
+            $link_html = '<a href="' . esc_url( $link['url'] ) . '" target="_blank" rel="' . esc_attr( $rel ) . '">' . esc_html( $anchor ) . '</a>';
+        } else {
+            $link_html = '<a href="' . esc_url( $link['url'] ) . '" rel="internal">' . esc_html( $anchor ) . '</a>';
+        }
+
+        // Append as a sentence
+        $parts[$pos - 1] = rtrim( $parts[$pos - 1], '.' ) . '. ' 
+                         . sprintf( 
+                             /* translators: %s: link HTML */
+                             esc_html__( 'For more on this, see %s.', 'sk-blogger' ), 
+                             $link_html 
+                           );
+
+        $content = implode( '', $parts );
+        return true;
+    }
+
+    /**
+     * Check if anchor exists inside a <p> tag (safe location).
+     */
+    private static function anchor_exists_in_paragraph( $content, $anchor ) {
+        $test_content = preg_replace( '/<!--.*?-->/s', '', $content );
+        $test_content = preg_replace( '/<script\b[^>]*>.*?<\/script>/is', '', $test_content );
+        $test_content = preg_replace( '/<style\b[^>]*>.*?<\/style>/is', '', $test_content );
+        $test_content = preg_replace( '/<a\b[^>]*>.*?<\/a>/is', '', $test_content );
+
+        $pattern = '/<p\b[^>]*>(?:(?!<\/p>).)*?\b' . preg_quote( $anchor, '/' ) . '\b(?:(?!<\/p>).)*?<\/p>/isu';
+
+        return (bool) preg_match( $pattern, $test_content );
+    }
+
+    /**
+     * Replace FIRST occurrence of anchor OUTSIDE comments, scripts, styles, and existing <a>.
+     */
+    private static function replace_first_anchor_outside_tags( $content, $anchor, $replacement ) {
+        $pattern = '/(<!--.*?-->|<script\b[^>]*>.*?<\/script>|<style\b[^>]*>.*?<\/style>|<a\b[^>]*>.*?<\/a>)/is';
+
+        $parts = preg_split( $pattern, $content, -1, PREG_SPLIT_DELIM_CAPTURE );
+
+        if ( ! $parts ) {
+            return $content;
+        }
+
+        $replaced = false;
+
+        foreach ( $parts as $i => $part ) {
+            if ( preg_match( '/^\s*(<!--|<script|<style|<a\b)/i', $part ) ) {
+                continue;
+            }
+
+            if ( ! $replaced && mb_stripos( $part, $anchor ) !== false ) {
+                $new_part = preg_replace(
+                    '/' . preg_quote( $anchor, '/' ) . '/iu',
+                    $replacement,
+                    $part,
+                    1,
+                    $count
+                );
+
+                if ( $count > 0 ) {
+                    $parts[ $i ] = $new_part;
+                    $replaced = true;
+                    break;
+                }
+            }
+        }
+
+        return implode( '', $parts );
+    }
+
+    /**
+     * Fallback: Bulk-inject internal links at end of random paragraphs.
+     */
+    private static function inject_internal_links_into_paragraphs( $content, $links ) {
+        $parts = preg_split( '/(<\/p>)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
+
+        if ( count( $parts ) < 6 ) {
+            // Append "Related Reading" section
+            $extra = "\n<p><strong>" . esc_html__( 'Related Reading:', 'sk-blogger' ) . '</strong> ';
+            $anchors = [];
+            foreach ( $links as $link ) {
+                $anchors[] = '<a href="' . esc_url( $link['url'] ) . '" rel="internal">' . esc_html( $link['anchor'] ) . '</a>';
+            }
+            $extra .= implode( ', ', $anchors ) . '.</p>';
+            return $content . $extra;
+        }
+
+        $total_paras = 0;
+        for ( $i = 0; $i < count( $parts ); $i += 2 ) { $total_paras++; }
+
+        $positions = [];
+        $step = max( 1, (int) ( $total_paras / ( count( $links ) + 1 ) ) );
+        for ( $i = $step; $i < $total_paras; $i += $step ) {
+            $positions[] = $i * 2;
+        }
+
+        $link_index = 0;
+        foreach ( $positions as $pos ) {
+            if ( ! isset( $parts[$pos] ) || ! isset( $links[$link_index] ) ) { break; }
+
+            $link  = $links[$link_index];
+            $extra = ' <a href="' . esc_url( $link['url'] ) . '" rel="internal">' . esc_html( $link['anchor'] ) . '</a>.';
+
+            $parts[$pos - 1] = rtrim( $parts[$pos - 1], '.' ) . $extra;
+            $link_index++;
+        }
+
+        return implode( '', $parts );
+    }
+
+    /**
+     * Fallback: Append external links at the end.
+     */
+    private static function append_external_links_to_content( $content, $links ) {
+        $extra = "\n<p><em>" . esc_html__( 'Sources:', 'sk-blogger' ) . ' ';
+        $anchors = [];
+        foreach ( $links as $i => $link ) {
+            $rel = ( $i === 0 ) ? 'noopener' : 'noopener nofollow';
+            $anchors[] = '<a href="' . esc_url( $link['url'] ) . '" target="_blank" rel="' . esc_attr( $rel ) . '">' . esc_html( $link['anchor'] ) . '</a>';
+        }
+        $extra .= implode( ', ', $anchors ) . '.</em></p>';
+        return $content . $extra;
     }
 
     private static function find_external_link_targets( $topic, $keywords, $count = 2 ) {
@@ -361,100 +730,6 @@ class SK_Generator {
         }
 
         return $targets;
-    }
-
-    private static function create_anchor_text( $title, $keywords = [] ) {
-        if ( mb_strlen( $title ) <= 40 ) { return $title; }
-        foreach ( (array) $keywords as $kw ) {
-            if ( ! empty( $kw ) && mb_stripos( $title, $kw ) !== false ) {
-                return $kw;
-            }
-        }
-        return mb_substr( $title, 0, 40 ) . '...';
-    }
-
-    private static function insert_links_into_content( $content, $insertions ) {
-        $inserted     = 0;
-        $used_anchors = [];
-        $ext_count    = 0;
-
-        shuffle( $insertions );
-
-        foreach ( $insertions as $link ) {
-            $anchor = $link['text'];
-
-            if ( in_array( strtolower( $anchor ), $used_anchors, true ) ) {
-                continue;
-            }
-
-            $pattern = '/<p[^>]*>.*?\b' . preg_quote( $anchor, '/' ) . '\b.*?<\/p>/isu';
-
-            if ( ! preg_match( $pattern, $content ) ) {
-                continue;
-            }
-
-            $replacement = '<a href="' . esc_url( $link['url'] ) . '"';
-
-            if ( $link['type'] === 'external' ) {
-                $ext_count++;
-                // First external = dofollow, rest = nofollow
-                if ( $ext_count === 1 ) {
-                    $replacement .= ' target="_blank" rel="noopener"';
-                } else {
-                    $replacement .= ' target="_blank" rel="noopener nofollow"';
-                }
-            } else {
-                $replacement .= ' rel="internal"';
-            }
-            $replacement .= '>' . esc_html( $anchor ) . '</a>';
-
-            $content = preg_replace(
-                '/' . preg_quote( $anchor, '/' ) . '/iu',
-                $replacement,
-                $content,
-                1
-            );
-
-            $used_anchors[] = strtolower( $anchor );
-            $inserted++;
-        }
-
-        if ( $inserted === 0 && ! empty( $insertions ) ) {
-            $content = self::inject_links_into_paragraphs( $content, $insertions );
-        }
-
-        return $content;
-    }
-
-    private static function inject_links_into_paragraphs( $content, $insertions ) {
-        $parts = preg_split( '/(<\/p>)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
-        if ( count( $parts ) < 3 ) { return $content; }
-
-        $total_paras = 0;
-        for ( $i = 0; $i < count( $parts ); $i += 2 ) { $total_paras++; }
-        if ( $total_paras < 3 ) { return $content; }
-
-        $insert_positions = [];
-        $step = max( 1, (int) ( $total_paras / ( count( $insertions ) + 1 ) ) );
-        for ( $i = $step; $i < $total_paras; $i += $step ) {
-            $insert_positions[] = $i * 2;
-        }
-
-        $link_index = 0;
-        foreach ( $insert_positions as $pos ) {
-            if ( ! isset( $parts[$pos] ) || ! isset( $insertions[$link_index] ) ) { break; }
-
-            $link  = $insertions[$link_index];
-            $extra = ' ' . esc_html__( 'Learn more about this on ', 'sk-blogger' )
-                   . '<a href="' . esc_url( $link['url'] ) . '"'
-                   . ( $link['type'] === 'external' ? ' target="_blank" rel="noopener nofollow"' : '' )
-                   . '>' . esc_html( $link['text'] ) . '</a>.';
-
-            $parts[$pos - 1] = $parts[$pos - 1] . $extra;
-            $link_index++;
-        }
-
-        return implode( '', $parts );
     }
 
     /* ================================================================

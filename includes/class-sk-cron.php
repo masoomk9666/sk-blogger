@@ -118,7 +118,14 @@ class SK_Cron {
     }
 
     /**
-     * Daily trending processor — pick ONE keyword per category, add to queue.
+     * Daily trending processor with multi-level fallback.
+     *
+     * Fallback chain per category:
+     * 1. Today's pending keywords
+     * 2. Old pending keywords (from earlier dates)
+     * 3. Recently used keywords (last 30 days) — cloned for today
+     *
+     * This guarantees daily blog for every category (99% cases).
      */
     public static function process_daily_trending() {
         if ( ! get_option( 'sk_trending_enabled', 1 ) ) {
@@ -129,25 +136,63 @@ class SK_Cron {
         SK_Logger::info( 'Daily trending processor started.', 'cron' );
 
         $today      = current_time( 'Y-m-d' );
-        $categories = SK_DB::get_categories_with_trending( $today );
+        $categories = get_categories( [ 'hide_empty' => 0 ] );
 
         if ( empty( $categories ) ) {
-            SK_Logger::info( "No trending keywords for {$today}.", 'cron' );
+            SK_Logger::info( 'No categories found.', 'cron' );
             return;
         }
 
-        $added   = 0;
-        $skipped = 0;
+        $reuse_enabled = (bool) get_option( 'sk_reuse_keywords_enabled', 1 );
 
-        foreach ( $categories as $cat_id ) {
-            $cat_id = (int) $cat_id;
+        $added       = 0;
+        $skipped     = 0;
+        $reused_old  = 0;
+        $reused_used = 0;
 
+        foreach ( $categories as $cat ) {
+            $cat_id = (int) $cat->term_id;
+
+            // ===== STEP 1: Today's pending keywords =====
             $trending = SK_DB::get_today_trending_for_category( $cat_id, $today );
 
-            if ( empty( $trending ) ) { $skipped++; continue; }
+            // ===== STEP 2: Fallback — old pending keywords =====
+            if ( empty( $trending ) && $reuse_enabled ) {
+                $old = SK_DB::get_old_pending_keywords( $cat_id, 1 );
+                if ( ! empty( $old ) ) {
+                    $trending = $old;
+                    $reused_old++;
+                    SK_Logger::info( "Step 2: Reusing old pending keyword for category: {$cat->name}", 'cron' );
+                }
+            }
+
+            // ===== STEP 3: Fallback — clone recently used keyword =====
+            if ( empty( $trending ) && $reuse_enabled ) {
+                $reusable = SK_DB::get_reusable_keywords( 1, $cat_id );
+                if ( ! empty( $reusable ) ) {
+                    $source = $reusable[0];
+                    $new_id = SK_DB::reuse_trending_keyword( $source->id, $today );
+
+                    if ( $new_id ) {
+                        $reused_used++;
+                        SK_Logger::info( "Step 3: Cloned reusable keyword for category: {$cat->name} → '{$source->keyword}'", 'cron' );
+
+                        // Re-fetch as trending object
+                        $trending = SK_DB::get_today_trending_for_category( $cat_id, $today );
+                    }
+                }
+            }
+
+            // If still nothing — skip category
+            if ( empty( $trending ) ) {
+                SK_Logger::info( "No keywords available (new, old, or reusable) for category: {$cat->name}", 'cron' );
+                $skipped++;
+                continue;
+            }
 
             $item = $trending[0];
 
+            // Check if already in queue
             global $wpdb;
             $queue_table = SK_DB::table( 'queue' );
             $exists = $wpdb->get_var( $wpdb->prepare(
@@ -167,17 +212,19 @@ class SK_Cron {
             $extra_kws   = ! empty( $item->keywords ) ? $item->keywords : '';
             $combined_kw = $extra_kws ? $primary_kw . ', ' . $extra_kws : $primary_kw;
 
+            // Add to queue
             $queue_id = SK_DB::enqueue( $item->keyword, $combined_kw, 1, null, $cat_id );
 
+            // Mark as used
             SK_DB::mark_trending_used( $item->id );
 
-            $cat = get_category( $cat_id );
-            $cat_name = $cat ? $cat->name : "Category #{$cat_id}";
-
             $added++;
-            SK_Logger::info( "Trending queued: '{$item->keyword}' → {$cat_name} (queue #{$queue_id})", 'cron' );
+            SK_Logger::info( "Trending queued: '{$item->keyword}' → {$cat->name} (queue #{$queue_id})", 'cron' );
         }
 
-        SK_Logger::info( "Trending done: {$added} added, {$skipped} skipped.", 'cron' );
+        SK_Logger::info( 
+            "Trending done: {$added} added | {$reused_old} reused-old | {$reused_used} reused-used | {$skipped} skipped.", 
+            'cron' 
+        );
     }
 }

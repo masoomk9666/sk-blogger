@@ -30,24 +30,38 @@ class SK_Admin {
 
     public function register_settings() {
         $fields = [
+            // AI Provider
             'sk_ai_provider', 'sk_openai_key', 'sk_openai_model',
             'sk_gemini_key', 'sk_gemini_model',
             'sk_claude_key', 'sk_claude_model',
+
+            // Post Defaults
             'sk_default_status', 'sk_default_author', 'sk_default_category',
             'sk_post_length', 'sk_tone', 'sk_language',
+
+            // Images
             'sk_image_provider', 'sk_include_images', 'sk_image_count',
+
+            // SEO
             'sk_seo_enabled',
             'sk_keyword_placement_enabled',
             'sk_internal_links_enabled',
             'sk_external_links_enabled',
             'sk_schema_enabled',
+
+            // Auto Topics
             'sk_auto_topics_enabled',
             'sk_auto_topics_niche',
             'sk_auto_topics_keywords',
             'sk_auto_topics_count',
             'sk_auto_topics_threshold',
+
+            // Queue
             'sk_queue_batch', 'sk_max_attempts', 'sk_posts_per_day',
+
+            // Trending Keywords
             'sk_trending_enabled', 'sk_trending_hour',
+            'sk_reuse_keywords_enabled',   // ← NEW: fallback reuse toggle
         ];
 
         foreach ( $fields as $f ) {
@@ -59,6 +73,10 @@ class SK_Admin {
         extract( $vars );
         include SK_BLOGGER_PATH . 'admin/views/' . $view . '.php';
     }
+
+    /* ============================================================
+     * PAGE RENDERERS
+     * ============================================================ */
 
     public function dashboard_page() {
         $counts       = SK_DB::queue_counts();
@@ -100,6 +118,10 @@ class SK_Admin {
         $this->render( 'settings' );
     }
 
+    /* ============================================================
+     * POST ACTIONS HANDLER
+     * ============================================================ */
+
     private function handle_post_actions() {
         if ( ! isset( $_POST['sk_action'] ) ) { return; }
         if ( ! current_user_can( 'manage_options' ) ) { return; }
@@ -108,6 +130,8 @@ class SK_Admin {
         $action = sanitize_key( $_POST['sk_action'] );
 
         switch ( $action ) {
+
+            /* ---------- QUEUE ---------- */
 
             case 'add_queue':
                 $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : 0;
@@ -135,6 +159,21 @@ class SK_Admin {
                 SK_DB::delete_queue( (int) ( $_POST['id'] ?? 0 ) );
                 break;
 
+            case 'process_now':
+                SK_Queue::process();
+                break;
+
+            case 'reset_failed':
+                global $wpdb;
+                $wpdb->query(
+                    "UPDATE " . SK_DB::table( 'queue' ) . " 
+                     SET status = 'pending', attempts = 0, error = NULL, scheduled_at = NOW() 
+                     WHERE status = 'failed'"
+                );
+                break;
+
+            /* ---------- TOPICS ---------- */
+
             case 'add_topic':
                 $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : null;
                 SK_DB::add_topic(
@@ -148,23 +187,10 @@ class SK_Admin {
                 SK_DB::delete_topic( (int) ( $_POST['id'] ?? 0 ) );
                 break;
 
-            case 'process_now':
-                SK_Queue::process();
-                break;
-
             case 'generate_topics_now':
                 if ( class_exists( 'SK_Cron' ) ) {
                     SK_Cron::auto_generate_topics();
                 }
-                break;
-
-            case 'reset_failed':
-                global $wpdb;
-                $wpdb->query(
-                    "UPDATE " . SK_DB::table( 'queue' ) . " 
-                     SET status = 'pending', attempts = 0, error = NULL, scheduled_at = NOW() 
-                     WHERE status = 'failed'"
-                );
                 break;
 
             /* ---------- TRENDING KEYWORDS ---------- */

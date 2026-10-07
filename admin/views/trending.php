@@ -4,7 +4,7 @@
 
     <p style="background:#fff8e5;padding:12px;border-left:4px solid #f0b849;margin:15px 0;">
         <strong><?php esc_html_e( 'How it works:', 'sk-blogger' ); ?></strong>
-        <?php esc_html_e( 'Save trending keywords for each category with a date. Each day at 9:00 AM, the plugin automatically picks ONE keyword per category and adds it to the queue. All posts are generated automatically.', 'sk-blogger' ); ?>
+        <?php esc_html_e( 'Save trending keywords for each category with a date. Each day at the configured hour, the plugin automatically picks ONE keyword per category and adds it to the queue. If today\'s keywords are missing, it reuses old pending or recently used keywords.', 'sk-blogger' ); ?>
     </p>
 
     <!-- Stats -->
@@ -21,7 +21,7 @@
 
     <!-- Add Forms -->
     <div class="sk-two-cols">
-        <!-- Single Add -->
+        <!-- ===== Single Add ===== -->
         <div class="sk-box">
             <h2><?php esc_html_e( 'Add Single Keyword', 'sk-blogger' ); ?></h2>
             <form method="post">
@@ -29,10 +29,21 @@
                 <input type="hidden" name="sk_action" value="add_trending">
 
                 <p>
-                    <label><?php esc_html_e( 'Keyword / Topic', 'sk-blogger' ); ?><br>
+                    <label><?php esc_html_e( 'Trending Topic / Keyword', 'sk-blogger' ); ?> <span style="color:#d63638;">*</span><br>
                         <input type="text" name="keyword" class="regular-text" required
                                placeholder="e.g. ChatGPT new features 2026">
                     </label>
+                    <span class="description"><?php esc_html_e( 'This becomes the post topic AND the primary focus keyword.', 'sk-blogger' ); ?></span>
+                </p>
+
+                <p>
+                    <label><?php esc_html_e( 'Extra Focus Keywords (optional)', 'sk-blogger' ); ?><br>
+                        <input type="text" name="keywords" class="regular-text"
+                               placeholder="e.g. AI, machine learning, automation">
+                    </label>
+                    <span class="description">
+                        <?php esc_html_e( 'Comma-separated. Combined with the primary keyword for SEO & internal linking.', 'sk-blogger' ); ?>
+                    </span>
                 </p>
 
                 <p>
@@ -63,7 +74,7 @@
             </form>
         </div>
 
-        <!-- Bulk Add -->
+        <!-- ===== Bulk Add ===== -->
         <div class="sk-box">
             <h2><?php esc_html_e( 'Bulk Add', 'sk-blogger' ); ?></h2>
             <form method="post">
@@ -71,10 +82,20 @@
                 <input type="hidden" name="sk_action" value="bulk_trending">
 
                 <p>
-                    <label><?php esc_html_e( 'One keyword per line', 'sk-blogger' ); ?><br>
-                        <textarea name="bulk_keywords" rows="8" class="large-text"
+                    <label><?php esc_html_e( 'One trending topic per line', 'sk-blogger' ); ?> <span style="color:#d63638;">*</span><br>
+                        <textarea name="bulk_keywords" rows="8" class="large-text" required
                                   placeholder="ChatGPT update 2026&#10;AI agents for developers&#10;Machine learning trends"></textarea>
                     </label>
+                </p>
+
+                <p>
+                    <label><?php esc_html_e( 'Shared Extra Keywords (optional)', 'sk-blogger' ); ?><br>
+                        <input type="text" name="keywords" class="regular-text"
+                               placeholder="e.g. AI, automation, machine learning">
+                    </label>
+                    <span class="description">
+                        <?php esc_html_e( 'These keywords will be added to all bulk topics.', 'sk-blogger' ); ?>
+                    </span>
                 </p>
 
                 <p>
@@ -127,8 +148,9 @@
             <thead>
                 <tr>
                     <th style="width:50px;">ID</th>
-                    <th><?php esc_html_e( 'Keyword', 'sk-blogger' ); ?></th>
-                    <th style="width:150px;"><?php esc_html_e( 'Category', 'sk-blogger' ); ?></th>
+                    <th><?php esc_html_e( 'Trending Topic', 'sk-blogger' ); ?></th>
+                    <th style="width:200px;"><?php esc_html_e( 'Extra Keywords', 'sk-blogger' ); ?></th>
+                    <th style="width:130px;"><?php esc_html_e( 'Category', 'sk-blogger' ); ?></th>
                     <th style="width:100px;"><?php esc_html_e( 'Date', 'sk-blogger' ); ?></th>
                     <th style="width:90px;"><?php esc_html_e( 'Status', 'sk-blogger' ); ?></th>
                     <th style="width:70px;"><?php esc_html_e( 'Post', 'sk-blogger' ); ?></th>
@@ -141,7 +163,14 @@
             ?>
                 <tr>
                     <td><?php echo (int) $t->id; ?></td>
-                    <td><?php echo esc_html( $t->keyword ); ?></td>
+                    <td><strong><?php echo esc_html( $t->keyword ); ?></strong></td>
+                    <td>
+                        <?php if ( ! empty( $t->keywords ) ) : ?>
+                            <small style="color:#2271b1;"><?php echo esc_html( $t->keywords ); ?></small>
+                        <?php else : ?>
+                            <em style="color:#999;">—</em>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <?php if ( $cat && ! is_wp_error( $cat ) ) : ?>
                             <a href="<?php echo esc_url( admin_url( 'edit-tags.php?action=edit&taxonomy=category&tag_ID=' . $t->category_id ) ); ?>">
@@ -170,7 +199,7 @@
                             <?php wp_nonce_field( 'sk_admin_action' ); ?>
                             <input type="hidden" name="sk_action" value="delete_trending">
                             <input type="hidden" name="id" value="<?php echo (int) $t->id; ?>">
-                            <button class="button button-small">×</button>
+                            <button class="button button-small" title="Delete">×</button>
                         </form>
                     </td>
                 </tr>
