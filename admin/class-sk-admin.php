@@ -119,16 +119,28 @@ class SK_Admin {
         switch ( $action ) {
 
             case 'add_queue':
+                // Category from dropdown (or 0 → use default from settings)
+                $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : 0;
+
                 SK_DB::enqueue(
                     sanitize_text_field( $_POST['topic'] ?? '' ),
                     sanitize_text_field( $_POST['keywords'] ?? '' ),
-                    (int) ( $_POST['priority'] ?? 5 )
+                    (int) ( $_POST['priority'] ?? 5 ),
+                    null,
+                    $category_id
                 );
                 break;
 
             case 'bulk_queue':
-                $lines = array_filter( array_map( 'trim', explode( "\n", $_POST['bulk_topics'] ?? '' ) ) );
-                SK_Queue::add_bulk( $lines, sanitize_text_field( $_POST['bulk_keywords'] ?? '' ) );
+                $lines       = array_filter( array_map( 'trim', explode( "\n", $_POST['bulk_topics'] ?? '' ) ) );
+                $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : 0;
+
+                SK_Queue::add_bulk(
+                    $lines,
+                    sanitize_text_field( $_POST['bulk_keywords'] ?? '' ),
+                    5,
+                    $category_id
+                );
                 break;
 
             case 'delete_queue':
@@ -136,9 +148,12 @@ class SK_Admin {
                 break;
 
             case 'add_topic':
+                $category_id = isset( $_POST['category_id'] ) ? (int) $_POST['category_id'] : null;
+
                 SK_DB::add_topic(
                     sanitize_text_field( $_POST['title'] ?? '' ),
-                    sanitize_text_field( $_POST['keywords'] ?? '' )
+                    sanitize_text_field( $_POST['keywords'] ?? '' ),
+                    $category_id
                 );
                 break;
 
@@ -151,14 +166,12 @@ class SK_Admin {
                 break;
 
             case 'generate_topics_now':
-                // Manually trigger AI topic generation
                 if ( class_exists( 'SK_Cron' ) ) {
                     SK_Cron::auto_generate_topics();
                 }
                 break;
 
             case 'reset_failed':
-                // Reset all failed items to pending
                 global $wpdb;
                 $wpdb->query(
                     "UPDATE " . SK_DB::table( 'queue' ) . " 
